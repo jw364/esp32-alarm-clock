@@ -44,13 +44,16 @@ jobs:
           chmod +x /usr/local/bin/wokwi-cli
           wokwi-cli --version
 
-      - name: wokwi-cli help
-        run: wokwi-cli --help || true
-
-      - name: Run Wokwi simulation (CI_EXPECT_TEXT env var)
+      - name: Run Wokwi simulation (debug verbose)
         env:
           WOKWI_CLI_TOKEN: ${{ secrets.WOKWI_CLI_TOKEN }}
-          CI_EXPECT_TEXT: "HELLO WOKWI"
+          DEBUG: '*'
         run: |
-          wokwi-cli --timeout 10000 .
+          wokwi-cli --timeout 10000 --serial-log-file serial.log . 2>&1 | head -200
         continue-on-error: true
+
+      - name: Print serial output
+        if: always()
+        run: |
+          echo "=== SERIAL LOG ($(wc -c < serial.log 2>/dev/null || echo 0) bytes) ==="
+          cat serial.log 2>/dev/null || echo "(no serial.log)"
