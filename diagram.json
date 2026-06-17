@@ -3,7 +3,19 @@
   "author": "jw364",
   "editor": "wokwi",
   "parts": [
-    {"type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {}}
+    {
+      "type": "wokwi-esp32-devkit-v1",
+      "id": "esp",
+      "top": 0,
+      "left": 0,
+      "attrs": { "fullBoot": "1" }
+    }
   ],
-  "connections": []
+  "connections": [
+    ["esp:TX0", "$serialMonitor:RX", "", []],
+    ["esp:RX0", "$serialMonitor:TX", "", []]
+  ],
+  "serialMonitor": {
+    "display": "terminal"
+  }
 }
