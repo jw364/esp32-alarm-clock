@@ -32,12 +32,13 @@ jobs:
         run: pio run
 
       # Copy built binary to firmware/ so wokwi.toml can find it
-      - name: Stage firmware binary
+      - name: Stage firmware artifacts
         run: |
           mkdir -p firmware
           cp .pio/build/esp32dev/firmware.bin firmware/firmware.bin
-          echo "Binary size: $(wc -c < firmware/firmware.bin) bytes"
-          ls -la firmware/
+          cp .pio/build/esp32dev/firmware.elf firmware/firmware.elf
+          echo "firmware.bin: $(wc -c < firmware/firmware.bin) bytes"
+          echo "firmware.elf: $(wc -c < firmware/firmware.elf) bytes"
 
       - name: Run Wokwi simulation
         uses: wokwi/wokwi-ci-action@v1

@@ -1,3 +1,4 @@
 [wokwi]
 version = 1
+elf      = "firmware/firmware.elf"
 firmware = "firmware/firmware.bin"
