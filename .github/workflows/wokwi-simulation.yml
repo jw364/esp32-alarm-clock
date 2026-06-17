@@ -35,20 +35,41 @@ jobs:
         run: |
           mkdir -p firmware
           cp .pio/build/esp32dev/firmware.bin firmware/firmware.bin
-          cp .pio/build/esp32dev/firmware.elf firmware/firmware.elf
           echo "firmware.bin: $(wc -c < firmware/firmware.bin) bytes"
-          echo "firmware.elf: $(wc -c < firmware/firmware.elf) bytes"
+          md5sum firmware/firmware.bin
+          file firmware/firmware.bin
+          xxd firmware/firmware.bin | head -4
 
-      - name: Run Wokwi simulation (official action)
-        uses: wokwi/wokwi-ci-action@v1
-        with:
-          token: ${{ secrets.WOKWI_CLI_TOKEN }}
-          timeout: 10000
-          expect_text: 'HELLO WOKWI'
+      - name: Show project structure
+        run: |
+          echo "=== wokwi.toml ==="
+          cat wokwi.toml
+          echo "=== diagram.json ==="
+          cat diagram.json
+          echo "=== CWD ==="
+          pwd
+          echo "=== firmware/ ==="
+          ls -la firmware/
+
+      - name: Install wokwi-cli
+        run: |
+          wget -q -O /usr/local/bin/wokwi-cli \
+            https://github.com/wokwi/wokwi-cli/releases/latest/download/wokwi-cli-linuxstatic-x64
+          chmod +x /usr/local/bin/wokwi-cli
+          wokwi-cli --version
+
+      - name: Run Wokwi simulation
+        env:
+          WOKWI_CLI_TOKEN: ${{ secrets.WOKWI_CLI_TOKEN }}
+        run: |
+          wokwi-cli \
+            --timeout 10000 \
+            --serial-log-file serial.log \
+            .
         continue-on-error: true
 
       - name: Print serial output
         if: always()
         run: |
-          echo "=== SERIAL LOG ==="
-          cat serial.log 2>/dev/null || echo "(no serial.log)"
+          echo "=== SERIAL LOG ($(wc -c < serial.log 2>/dev/null || echo 0) bytes) ==="
+          xxd serial.log 2>/dev/null || echo "(no serial.log)"
