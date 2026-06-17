@@ -1,0 +1,58 @@
+name: Alarm Clock Boot & Button Test
+version: 1
+
+steps:
+  # ── 1. Boot ──────────────────────────────────────────────────
+  - wait-serial: "ESP32 Bedside Alarm Clock"
+    timeout: 10000
+
+  # ── 2. RTC init ──────────────────────────────────────────────
+  - wait-serial: "[RTC]   OK"
+    timeout: 10000
+
+  # ── 3. SD fails gracefully ───────────────────────────────────
+  - wait-serial: "FAILED — backup tone (LittleFS) will be used."
+    timeout: 10000
+
+  # ── 4. LittleFS mounts and generates backup WAV ──────────────
+  - wait-serial: "[LFS]   OK"
+    timeout: 10000
+
+  # ── 5. Ready ─────────────────────────────────────────────────
+  - wait-serial: "[BOOT]  Ready."
+    timeout: 15000
+
+  # ── 6. Let the clock tick for a couple seconds ───────────────
+  - delay: 2000
+
+  # ── 7. Alarm enable toggle ───────────────────────────────────
+  - button:
+      part: btn_alarm
+      action: click
+  - wait-serial: "Alarm ENABLED"
+    timeout: 3000
+
+  # ── 8. Hour adjust ────────────────────────────────────────────
+  - button:
+      part: btn_hour
+      action: click
+  - wait-serial: "Alarm hour"
+    timeout: 3000
+
+  # ── 9. Minute adjust ─────────────────────────────────────────
+  - button:
+      part: btn_minute
+      action: click
+  - wait-serial: "Alarm minute"
+    timeout: 3000
+
+  # ── 10. Alarm disable ────────────────────────────────────────
+  - button:
+      part: btn_alarm
+      action: click
+  - wait-serial: "Alarm DISABLED"
+    timeout: 3000
+
+  # ── 11. Periodic status heartbeat (every 10 s) ───────────────
+  - wait-serial: "[STAT]"
+    timeout: 15000

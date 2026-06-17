@@ -1,0 +1,10 @@
+# PlatformIO build output (firmware binary is tracked separately in firmware/)
+.pio/
+
+# Temporary files
+build_log.txt
+*.tmp
+
+# Windows
+Thumbs.db
+Desktop.ini

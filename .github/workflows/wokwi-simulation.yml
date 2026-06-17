@@ -1,0 +1,45 @@
+name: Wokwi Simulation
+
+on:
+  push:
+    branches: [wokwi-validation, main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  simulate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ hashFiles('platformio.ini') }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Build firmware
+        run: pio run
+
+      # Copy built binary to firmware/ so wokwi.toml can find it
+      - name: Stage firmware binary
+        run: |
+          mkdir -p firmware
+          cp .pio/build/esp32dev/firmware.bin firmware/firmware.bin
+
+      - name: Run Wokwi simulation
+        uses: wokwi/wokwi-ci-action@v1
+        with:
+          token: ${{ secrets.WOKWI_CLI_TOKEN }}
+          timeout: 60000
+          scenario: wokwi.scenario.yaml
+          expect_text: "[BOOT]  Ready."
