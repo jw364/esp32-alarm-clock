@@ -2,6 +2,9 @@ name: Alarm Clock Boot & Button Test
 version: 1
 
 steps:
+  # ── 0. Sentinel — verifies setup() runs and serial capture works ──
+  - wait-serial: "WOKWI_BOOT"
+
   # ── 1. Banner ────────────────────────────────────────────────
   - wait-serial: "ESP32 Bedside Alarm Clock"
 

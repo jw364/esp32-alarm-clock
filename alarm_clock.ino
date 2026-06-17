@@ -128,7 +128,7 @@ RTC_DS3231         rtc;
 Adafruit_7segment  timeDisp;              // I2C 0x70
 TM1637Display*     dayDisp = nullptr;     // heap-allocated in setup() — ctor calls pinMode/digitalWrite before initArduino() in Wokwi
 Audio*             audio = nullptr;       // heap-allocated in setupAudio() — avoids I2S driver init at global-ctor time
-SPIClass           sdSPI(VSPI);
+SPIClass*          sdSPI = nullptr;       // heap-allocated in setupSD() — ctor calls xSemaphoreCreateMutex() before FreeRTOS in Wokwi
 
 // ============================================================
 //  ALARM & CLOCK STATE
@@ -240,8 +240,9 @@ void setupTM1637() {
 
 void setupSD() {
     Serial.print("[SD]    Initializing MicroSD (CS=5 SCK=18 MISO=23 MOSI=13) ... ");
-    sdSPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
-    if (!SD.begin(PIN_SD_CS, sdSPI)) {
+    sdSPI = new SPIClass(VSPI);
+    sdSPI->begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
+    if (!SD.begin(PIN_SD_CS, *sdSPI)) {
         Serial.println("FAILED — backup tone (LittleFS) will be used.");
         sdAvailable = false;
         return;
@@ -530,6 +531,7 @@ void audio_eof_mp3(const char *info) {
 // ============================================================
 void setup() {
     Serial.begin(115200);
+    Serial.println("WOKWI_BOOT");  // debug sentinel — remove after Wokwi serial capture verified
     delay(250);
     Serial.println();
     Serial.println("=============================================");
