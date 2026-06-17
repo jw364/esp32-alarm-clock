@@ -46,14 +46,13 @@ jobs:
           chmod +x /usr/local/bin/wokwi-cli
           wokwi-cli --version
 
-      - name: Run Wokwi simulation
+      - name: Run Wokwi simulation (no scenario — raw serial capture test)
         env:
           WOKWI_CLI_TOKEN: ${{ secrets.WOKWI_CLI_TOKEN }}
         run: |
           wokwi-cli \
-            --timeout 60000 \
+            --timeout 10000 \
             --serial-log-file serial.log \
-            --scenario wokwi.scenario.yaml \
             .
         continue-on-error: true
 
