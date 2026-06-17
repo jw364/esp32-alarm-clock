@@ -18,7 +18,7 @@ steps:
   - wait-serial: "[BOOT]  Ready."
 
   # ── 6. Let the clock tick ────────────────────────────────────
-  - delay: 2000
+  - delay: 2000ms
 
   # ── 7. Enable alarm ──────────────────────────────────────────
   - button:

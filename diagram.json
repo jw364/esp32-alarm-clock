@@ -54,7 +54,7 @@
     }
   ],
   "connections": [
-    ["esp:3V3",    "rtc1:VCC",        "red",    []],
+    ["esp:3V3",    "rtc1:5V",         "red",    []],
     ["esp:GND.1",  "rtc1:GND",        "black",  []],
     ["esp:D21",    "rtc1:SDA",        "blue",   []],
     ["esp:D22",    "rtc1:SCL",        "yellow", []],
