@@ -11,7 +11,7 @@
       "attrs": {}
     },
     {
-      "type": "wokwi-ds3231",
+      "type": "wokwi-ds1307",
       "id": "rtc1",
       "top": -160,
       "left": 230,
@@ -54,23 +54,23 @@
     }
   ],
   "connections": [
-    ["esp:3V3",    "rtc1:VCC",      "red",    []],
-    ["esp:GND.1",  "rtc1:GND",      "black",  []],
-    ["esp:21",     "rtc1:SDA",      "blue",   []],
-    ["esp:22",     "rtc1:SCL",      "yellow", []],
+    ["esp:3V3",    "rtc1:VCC",        "red",    []],
+    ["esp:GND.1",  "rtc1:GND",        "black",  []],
+    ["esp:D21",    "rtc1:SDA",        "blue",   []],
+    ["esp:D22",    "rtc1:SCL",        "yellow", []],
 
-    ["esp:3V3",    "r_i2c_sda:1",   "red",    []],
-    ["r_i2c_sda:2","esp:21",        "blue",   []],
-    ["esp:3V3",    "r_i2c_scl:1",   "red",    []],
-    ["r_i2c_scl:2","esp:22",        "yellow", []],
+    ["esp:3V3",    "r_i2c_sda:1",     "red",    []],
+    ["r_i2c_sda:2","esp:D21",         "blue",   []],
+    ["esp:3V3",    "r_i2c_scl:1",     "red",    []],
+    ["r_i2c_scl:2","esp:D22",         "yellow", []],
 
-    ["esp:32",     "btn_hour:1.l",   "orange", []],
-    ["btn_hour:2.l","esp:GND.2",    "black",  []],
+    ["esp:D32",    "btn_hour:1.l",    "orange", []],
+    ["btn_hour:2.l","esp:GND.2",      "black",  []],
 
-    ["esp:33",     "btn_minute:1.l", "orange", []],
-    ["btn_minute:2.l","esp:GND.2",  "black",  []],
+    ["esp:D33",    "btn_minute:1.l",  "orange", []],
+    ["btn_minute:2.l","esp:GND.2",    "black",  []],
 
-    ["esp:25",     "btn_alarm:1.l",  "orange", []],
-    ["btn_alarm:2.l","esp:GND.2",   "black",  []]
+    ["esp:D25",    "btn_alarm:1.l",   "orange", []],
+    ["btn_alarm:2.l","esp:GND.2",     "black",  []]
   ]
 }

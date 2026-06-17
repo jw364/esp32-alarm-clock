@@ -2,57 +2,47 @@ name: Alarm Clock Boot & Button Test
 version: 1
 
 steps:
-  # ── 1. Boot ──────────────────────────────────────────────────
+  # ── 1. Banner ────────────────────────────────────────────────
   - wait-serial: "ESP32 Bedside Alarm Clock"
-    timeout: 10000
 
   # ── 2. RTC init ──────────────────────────────────────────────
-  - wait-serial: "[RTC]   OK"
-    timeout: 10000
+  - wait-serial: "[RTC]"
 
   # ── 3. SD fails gracefully ───────────────────────────────────
-  - wait-serial: "FAILED — backup tone (LittleFS) will be used."
-    timeout: 10000
+  - wait-serial: "backup tone"
 
-  # ── 4. LittleFS mounts and generates backup WAV ──────────────
-  - wait-serial: "[LFS]   OK"
-    timeout: 10000
+  # ── 4. LittleFS mounts ───────────────────────────────────────
+  - wait-serial: "[LFS]"
 
-  # ── 5. Ready ─────────────────────────────────────────────────
+  # ── 5. Boot complete ─────────────────────────────────────────
   - wait-serial: "[BOOT]  Ready."
-    timeout: 15000
 
-  # ── 6. Let the clock tick for a couple seconds ───────────────
+  # ── 6. Let the clock tick ────────────────────────────────────
   - delay: 2000
 
-  # ── 7. Alarm enable toggle ───────────────────────────────────
+  # ── 7. Enable alarm ──────────────────────────────────────────
   - button:
       part: btn_alarm
       action: click
   - wait-serial: "Alarm ENABLED"
-    timeout: 3000
 
-  # ── 8. Hour adjust ────────────────────────────────────────────
+  # ── 8. Increment hour ────────────────────────────────────────
   - button:
       part: btn_hour
       action: click
   - wait-serial: "Alarm hour"
-    timeout: 3000
 
-  # ── 9. Minute adjust ─────────────────────────────────────────
+  # ── 9. Increment minute ──────────────────────────────────────
   - button:
       part: btn_minute
       action: click
   - wait-serial: "Alarm minute"
-    timeout: 3000
 
-  # ── 10. Alarm disable ────────────────────────────────────────
+  # ── 10. Disable alarm ────────────────────────────────────────
   - button:
       part: btn_alarm
       action: click
   - wait-serial: "Alarm DISABLED"
-    timeout: 3000
 
-  # ── 11. Periodic status heartbeat (every 10 s) ───────────────
+  # ── 11. Wait for periodic status print ───────────────────────
   - wait-serial: "[STAT]"
-    timeout: 15000

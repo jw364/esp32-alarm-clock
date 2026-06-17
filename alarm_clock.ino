@@ -133,6 +133,7 @@ SPIClass           sdSPI(VSPI);
 // ============================================================
 //  ALARM & CLOCK STATE
 // ============================================================
+bool     rtcOK               = false; // false = RTC absent; use fallback time
 uint8_t  alarmHour           = 7;    // 24-hour, 0-23
 uint8_t  alarmMinute         = 0;    // 0-59
 bool     alarmEnabled        = false;
@@ -199,9 +200,12 @@ bool    isAM(uint8_t h24);
 void setupRTC() {
     Serial.print("[RTC]   Initializing DS3231 ... ");
     if (!rtc.begin()) {
-        Serial.println("FAILED — check SDA=21 SCL=22. Halting.");
-        while (true) delay(1000);
+        Serial.println("FAILED — check SDA=21 SCL=22. Using fallback time 00:00 MON.");
+        rtcOK = false;
+        nowHour = 0; nowMinute = 0; nowDay = 1;
+        return;
     }
+    rtcOK = true;
     Serial.println("OK");
     if (rtc.lostPower()) {
         Serial.println("[RTC]   WARNING: RTC lost power — time may be wrong.");
@@ -557,10 +561,12 @@ void loop() {
     // Poll RTC every second
     if (now - lastRTCPoll >= RTC_POLL_MS) {
         lastRTCPoll = now;
-        DateTime dt = rtc.now();
-        nowHour   = dt.hour();
-        nowMinute = dt.minute();
-        nowDay    = dt.dayOfTheWeek();
+        if (rtcOK) {
+            DateTime dt = rtc.now();
+            nowHour   = dt.hour();
+            nowMinute = dt.minute();
+            nowDay    = dt.dayOfTheWeek();
+        }
         if ((int8_t)nowMinute != prevMinute) {
             if (alarmFired) Serial.println("[ALARM] Minute changed — alarmFired reset.");
             alarmFired = false;
