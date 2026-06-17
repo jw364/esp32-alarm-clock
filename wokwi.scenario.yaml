@@ -1,6 +1,6 @@
-name: Minimal Serial Test
+name: ESP32 Alarm Clock Boot Validation
 version: 1
 steps:
-  - wait-serial: "HELLO WOKWI"
-  - delay: 2000ms
-  - wait-serial: "TICK"
+  - wait-serial: "WOKWI_BOOT"
+  - wait-serial: "ESP32 Bedside Alarm Clock"
+  - wait-serial: "[BOOT]  Ready."

@@ -31,11 +31,11 @@ jobs:
       - name: Build firmware
         run: pio run
 
-      - name: Verify firmware
+      - name: Verify firmware artifacts
         run: |
-          ls -la .pio/build/esp32dev/firmware.bin .pio/build/esp32dev/firmware.elf
+          ls -la .pio/build/esp32dev/firmware.bin .pio/build/esp32dev/firmware.elf \
+                 .pio/build/esp32dev/bootloader.bin .pio/build/esp32dev/partitions.bin
           file .pio/build/esp32dev/firmware.bin
-          cat wokwi.toml
 
       - name: Install wokwi-cli
         run: |
@@ -44,12 +44,15 @@ jobs:
           chmod +x /usr/local/bin/wokwi-cli
           wokwi-cli --version
 
-      - name: Run Wokwi simulation (debug verbose)
+      - name: Run Wokwi simulation
         env:
           WOKWI_CLI_TOKEN: ${{ secrets.WOKWI_CLI_TOKEN }}
-          DEBUG: '*'
         run: |
-          wokwi-cli --timeout 10000 --serial-log-file serial.log . 2>&1 | head -200
+          wokwi-cli \
+            --timeout 60000 \
+            --scenario wokwi.scenario.yaml \
+            --serial-log-file serial.log \
+            .
         continue-on-error: true
 
       - name: Print serial output
@@ -57,3 +60,10 @@ jobs:
         run: |
           echo "=== SERIAL LOG ($(wc -c < serial.log 2>/dev/null || echo 0) bytes) ==="
           cat serial.log 2>/dev/null || echo "(no serial.log)"
+
+      - name: Upload serial log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-log
+          path: serial.log
