@@ -43,9 +43,9 @@
  *   RTClib                  — Adafruit
  *   Adafruit GFX Library    — Adafruit
  *   Adafruit LED Backpack   — Adafruit
- *   TM1637Display           — Avishay Orpaz
+ *   TM1637Display           — bundled in lib/TM1637Display/
  *   ESP32-audioI2S          — schreibfaul1 (GitHub)
- *   SD                      — built-in with ESP32 Arduino core
+ *   SD / LittleFS           — built-in with ESP32 Arduino core
  * ============================================================
  */
 
@@ -56,8 +56,8 @@
 #include <TM1637Display.h>
 #include <SD.h>
 #include <SPI.h>
+#include <LittleFS.h>
 #include <Audio.h>          // ESP32-audioI2S by schreibfaul1
-#include "driver/i2s.h"     // Direct I2S access for backup tone
 
 // ============================================================
 //  PIN DEFINITIONS
@@ -87,12 +87,13 @@
 #define DEBOUNCE_MS              50
 #define RTC_POLL_MS              1000
 #define COLON_BLINK_MS           500
-#define AUDIO_VOLUME             18      // 0–21
-#define BACKUP_TONE_FREQ_HZ      880     // A5, attention-grabbing
-#define BACKUP_SAMPLE_RATE       16000
-#define BACKUP_TONE_AMPLITUDE    10000   // 16-bit signed; 10000 ≈ 61% full scale
-#define BACKUP_TONE_MAX_MS       30000   // auto-stop backup tone after 30 s
-#define STATUS_PRINT_MS          10000   // serial heartbeat interval
+#define AUDIO_VOLUME             18      // 0-21
+#define BACKUP_TONE_FREQ_HZ      880
+#define BACKUP_SAMPLE_RATE       8000
+#define BACKUP_TONE_AMPLITUDE    8000    // 16-bit signed, ~49% full scale
+#define BACKUP_TONE_SECS         1       // WAV length; Audio lib loops on EOF
+#define BACKUP_TONE_MAX_MS       30000   // auto-stop after 30 s
+#define STATUS_PRINT_MS          10000
 
 // ============================================================
 //  TM1637 SEGMENT PATTERNS FOR DAY NAMES
@@ -101,20 +102,20 @@
 //    bit 0 = A (top)        bit 4 = E (bottom-left)
 //    bit 1 = B (top-right)  bit 5 = F (top-left)
 //    bit 2 = C (bot-right)  bit 6 = G (middle)
-//    bit 3 = D (bottom)     bit 7 = decimal point (unused)
+//    bit 3 = D (bottom)
 //
 //  Notes:
 //    M (MON) is approximated — 7-segment cannot render it perfectly.
 //    W (WED) is approximated as a "u" shape (bottom arc).
 // ============================================================
 static const uint8_t DAY_SEG[7][4] = {
-  { 0x6D, 0x3E, 0x54, 0x00 },  // 0 SUN  S=0x6D  U=0x3E  n=0x54
-  { 0x37, 0x3F, 0x54, 0x00 },  // 1 MON  M=0x37* O=0x3F  n=0x54
-  { 0x78, 0x3E, 0x79, 0x00 },  // 2 TUE  t=0x78  U=0x3E  E=0x79
-  { 0x1C, 0x79, 0x5E, 0x00 },  // 3 WED  W=0x1C* E=0x79  d=0x5E
-  { 0x78, 0x76, 0x3E, 0x00 },  // 4 THU  t=0x78  H=0x76  U=0x3E
-  { 0x71, 0x50, 0x06, 0x00 },  // 5 FRI  F=0x71  r=0x50  I=0x06
-  { 0x6D, 0x77, 0x78, 0x00 },  // 6 SAT  S=0x6D  A=0x77  t=0x78
+  { 0x6D, 0x3E, 0x54, 0x00 },  // 0 SUN  S U n
+  { 0x37, 0x3F, 0x54, 0x00 },  // 1 MON  M O n  (M approx)
+  { 0x78, 0x3E, 0x79, 0x00 },  // 2 TUE  t U E
+  { 0x1C, 0x79, 0x5E, 0x00 },  // 3 WED  W E d  (W approx)
+  { 0x78, 0x76, 0x3E, 0x00 },  // 4 THU  t H U
+  { 0x71, 0x50, 0x06, 0x00 },  // 5 FRI  F r I
+  { 0x6D, 0x77, 0x78, 0x00 },  // 6 SAT  S A t
 };
 static const char* const DAY_NAMES[7] = {
   "SUN","MON","TUE","WED","THU","FRI","SAT"
@@ -132,32 +133,27 @@ SPIClass           sdSPI(VSPI);
 // ============================================================
 //  ALARM & CLOCK STATE
 // ============================================================
-uint8_t  alarmHour        = 7;    // 24-hour, 0–23
-uint8_t  alarmMinute      = 0;    // 0–59
-bool     alarmEnabled     = false;
-bool     alarmPlaying     = false;
-bool     alarmFired       = false; // prevents re-trigger within same minute
-bool     sdAvailable      = false;
-bool     audioFilePlaying = false; // true while Audio lib has active stream
-volatile bool audioNeedsRestart = false; // set by EOF callback, consumed in loop()
+uint8_t  alarmHour           = 7;    // 24-hour, 0-23
+uint8_t  alarmMinute         = 0;    // 0-59
+bool     alarmEnabled        = false;
+bool     alarmPlaying        = false;
+bool     alarmFired          = false;
+bool     sdAvailable         = false;
+bool     audioFilePlaying    = false;
+bool     backupToneActive    = false; // true = playing LittleFS backup WAV
+volatile bool audioNeedsRestart = false;
 
-uint8_t  nowHour          = 0;
-uint8_t  nowMinute        = 0;
-uint8_t  nowDay           = 0;    // 0=Sun … 6=Sat
-int8_t   prevMinute       = -1;
-int8_t   prevDay          = -1;
-bool     colonOn          = false;
+uint8_t  nowHour             = 0;
+uint8_t  nowMinute           = 0;
+uint8_t  nowDay              = 0;
+int8_t   prevMinute          = -1;
+int8_t   prevDay             = -1;
+bool     colonOn             = false;
 
-uint32_t lastRTCPoll      = 0;
-uint32_t lastColonBlink   = 0;
-uint32_t lastStatusPrint  = 0;
-
-// ============================================================
-//  BACKUP TONE (FreeRTOS task writes square wave to I2S)
-// ============================================================
-TaskHandle_t         backupToneHandle = NULL;
-volatile bool        backupToneStop   = false;
-uint32_t             backupToneBegin  = 0;
+uint32_t lastRTCPoll         = 0;
+uint32_t lastColonBlink      = 0;
+uint32_t lastStatusPrint     = 0;
+uint32_t backupToneBegin     = 0;
 
 // ============================================================
 //  BUTTON DEBOUNCE
@@ -167,7 +163,7 @@ struct Button {
     bool     raw;
     bool     stable;
     uint32_t changeTime;
-    bool     edge;   // true for exactly one loop() iteration on press
+    bool     edge;
 };
 
 Button bHour   = { PIN_BTN_HOUR,   true, true, 0, false };
@@ -182,6 +178,7 @@ void    setupDisplay();
 void    setupTM1637();
 void    setupSD();
 void    setupAudio();
+void    setupBackupToneWAV();
 void    readButtons();
 void    updateTimeDisplay();
 void    updateDayDisplay();
@@ -190,10 +187,8 @@ void    playAlarm();
 void    stopAlarm();
 void    debounce(Button &b);
 bool    tryPlayAudioFile();
-void    restartAudioFile();
+void    restartAudio();
 void    startBackupTone();
-void    stopBackupTone();
-void    backupToneTaskFn(void* pv);
 uint8_t to12Hr(uint8_t h24);
 bool    isAM(uint8_t h24);
 
@@ -205,29 +200,27 @@ void setupRTC() {
     Serial.print("[RTC]   Initializing DS3231 ... ");
     if (!rtc.begin()) {
         Serial.println("FAILED — check SDA=21 SCL=22. Halting.");
-        while (true) { delay(1000); }
+        while (true) delay(1000);
     }
     Serial.println("OK");
-
     if (rtc.lostPower()) {
         Serial.println("[RTC]   WARNING: RTC lost power — time may be wrong.");
-        Serial.println("[RTC]   Uncomment rtc.adjust() below, upload once, then re-comment.");
+        // Uncomment once, upload, then re-comment:
         // rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
     }
-
     DateTime t = rtc.now();
-    Serial.printf("[RTC]   Current time: %04d-%02d-%02d %02d:%02d:%02d  DoW=%d(%s)\n",
+    Serial.printf("[RTC]   %04d-%02d-%02d %02d:%02d:%02d  DoW=%d(%s)\n",
                   t.year(), t.month(), t.day(),
                   t.hour(), t.minute(), t.second(),
                   t.dayOfTheWeek(), DAY_NAMES[t.dayOfTheWeek()]);
 }
 
 void setupDisplay() {
-    Serial.print("[DISP]  Initializing Adafruit HT16K33 7-seg (0x70) ... ");
+    Serial.print("[DISP]  Initializing Adafruit HT16K33 (0x70) ... ");
     timeDisp.begin(0x70);
-    timeDisp.setBrightness(10); // 0–15
-    // Show "----" on boot so the user knows it's alive
-    for (uint8_t pos : {0, 1, 3, 4}) timeDisp.writeDigitRaw(pos, 0x40); // middle seg
+    timeDisp.setBrightness(10);
+    uint8_t dashPos[] = { 0, 1, 3, 4 };
+    for (uint8_t pos : dashPos) timeDisp.writeDigitRaw(pos, 0x40);
     timeDisp.drawColon(true);
     timeDisp.writeDisplay();
     Serial.println("OK");
@@ -235,32 +228,28 @@ void setupDisplay() {
 
 void setupTM1637() {
     Serial.print("[TM16]  Initializing TM1637 (CLK=16 DIO=17) ... ");
-    dayDisp.setBrightness(5); // 0–7
-    dayDisp.setSegments(DAY_SEG[0]); // SUN as power-on test
+    dayDisp.setBrightness(5);
+    dayDisp.setSegments(DAY_SEG[0]);
     Serial.println("OK");
 }
 
 void setupSD() {
     Serial.print("[SD]    Initializing MicroSD (CS=5 SCK=18 MISO=23 MOSI=13) ... ");
     sdSPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
-
     if (!SD.begin(PIN_SD_CS, sdSPI)) {
-        Serial.println("FAILED — backup tone will be used if alarm triggers.");
+        Serial.println("FAILED — backup tone (LittleFS) will be used.");
         sdAvailable = false;
         return;
     }
     sdAvailable = true;
     Serial.printf("OK  (card: %llu MB)\n", SD.cardSize() / (1024ULL * 1024ULL));
-
     bool hasWav = SD.exists("/alarm.wav");
     bool hasMp3 = SD.exists("/alarm.mp3");
     Serial.printf("[SD]    /alarm.wav: %-9s  /alarm.mp3: %s\n",
                   hasWav ? "FOUND" : "not found",
                   hasMp3 ? "FOUND" : "not found");
-
-    if (!hasWav && !hasMp3) {
-        Serial.println("[SD]    WARNING: no alarm audio file found. Backup tone will be used.");
-    }
+    if (!hasWav && !hasMp3)
+        Serial.println("[SD]    WARNING: no alarm audio found — will use backup tone.");
 }
 
 void setupAudio() {
@@ -268,6 +257,67 @@ void setupAudio() {
     audio.setPinout(PIN_I2S_BCLK, PIN_I2S_LRC, PIN_I2S_DIN);
     audio.setVolume(AUDIO_VOLUME);
     Serial.printf("OK  (volume %d/21)\n", AUDIO_VOLUME);
+}
+
+// Generate a 1-second 880 Hz square-wave WAV in LittleFS.
+// The Audio library loops it on EOF to produce a continuous alarm tone
+// when no SD card file is available.
+void setupBackupToneWAV() {
+    Serial.print("[LFS]   Mounting LittleFS ... ");
+    if (!LittleFS.begin(true)) {   // true = format if mount fails
+        Serial.println("FAILED — backup tone unavailable.");
+        return;
+    }
+    Serial.println("OK");
+
+    const uint32_t numSamples = BACKUP_SAMPLE_RATE * BACKUP_TONE_SECS;
+    const uint32_t dataBytes  = numSamples * sizeof(int16_t);
+    const uint32_t wavSize    = 44 + dataBytes;
+
+    // Only regenerate if file is missing or wrong size
+    if (LittleFS.exists("/backup_tone.wav")) {
+        File f = LittleFS.open("/backup_tone.wav", "r");
+        if (f && (uint32_t)f.size() == wavSize) {
+            f.close();
+            Serial.println("[LFS]   Backup tone WAV already present, skipping generation.");
+            return;
+        }
+        if (f) f.close();
+    }
+
+    Serial.printf("[LFS]   Generating backup_tone.wav (%u Hz, %u Hz tone, %u s) ...\n",
+                  BACKUP_SAMPLE_RATE, BACKUP_TONE_FREQ_HZ, BACKUP_TONE_SECS);
+
+    File f = LittleFS.open("/backup_tone.wav", "w");
+    if (!f) {
+        Serial.println("[LFS]   ERROR: could not open for write.");
+        return;
+    }
+
+    // ── RIFF / WAV header (44 bytes, little-endian) ─────────
+    auto w16 = [&](uint16_t v) { f.write((uint8_t*)&v, 2); };
+    auto w32 = [&](uint32_t v) { f.write((uint8_t*)&v, 4); };
+    f.write((const uint8_t*)"RIFF", 4);  w32(36 + dataBytes);
+    f.write((const uint8_t*)"WAVE", 4);
+    f.write((const uint8_t*)"fmt ", 4);  w32(16);
+    w16(1);                              // PCM
+    w16(1);                              // mono
+    w32(BACKUP_SAMPLE_RATE);
+    w32(BACKUP_SAMPLE_RATE * 2);         // byte rate
+    w16(2);                              // block align
+    w16(16);                             // bits per sample
+    f.write((const uint8_t*)"data", 4);  w32(dataBytes);
+
+    // ── Square wave samples ──────────────────────────────────
+    const uint32_t period = BACKUP_SAMPLE_RATE / BACKUP_TONE_FREQ_HZ;
+    for (uint32_t i = 0; i < numSamples; i++) {
+        int16_t s = ((i % period) < (period / 2))
+                    ? (int16_t)BACKUP_TONE_AMPLITUDE
+                    : (int16_t)-BACKUP_TONE_AMPLITUDE;
+        f.write((uint8_t*)&s, 2);
+    }
+    f.close();
+    Serial.printf("[LFS]   backup_tone.wav written (%u bytes).\n", wavSize);
 }
 
 // ============================================================
@@ -285,17 +335,10 @@ bool isAM(uint8_t h24) { return h24 < 12; }
 void debounce(Button &b) {
     bool raw = digitalRead(b.pin);
     b.edge = false;
-
-    if (raw != b.raw) {
-        b.raw        = raw;
-        b.changeTime = millis();
-    }
-
+    if (raw != b.raw) { b.raw = raw; b.changeTime = millis(); }
     if (millis() - b.changeTime > DEBOUNCE_MS && b.stable != b.raw) {
         b.stable = b.raw;
-        if (b.stable == LOW) {  // falling edge = confirmed press
-            b.edge = true;
-        }
+        if (b.stable == LOW) b.edge = true;
     }
 }
 
@@ -307,7 +350,6 @@ void readButtons() {
     debounce(bMinute);
     debounce(bAlarm);
 
-    // Any button press while alarm is sounding stops it
     if (alarmPlaying && (bHour.edge || bMinute.edge || bAlarm.edge)) {
         Serial.println("[BTN]   Button pressed — stopping alarm.");
         stopAlarm();
@@ -316,18 +358,16 @@ void readButtons() {
 
     if (bHour.edge) {
         alarmHour = (alarmHour + 1) % 24;
-        Serial.printf("[BTN]   Alarm hour   → %02d:xx  (%d %s)\n",
+        Serial.printf("[BTN]   Alarm hour   -> %02d (%d %s)\n",
                       alarmHour, to12Hr(alarmHour), isAM(alarmHour) ? "AM" : "PM");
     }
-
     if (bMinute.edge) {
         alarmMinute = (alarmMinute + 1) % 60;
-        Serial.printf("[BTN]   Alarm minute → xx:%02d\n", alarmMinute);
+        Serial.printf("[BTN]   Alarm minute -> %02d\n", alarmMinute);
     }
-
     if (bAlarm.edge) {
         alarmEnabled = !alarmEnabled;
-        Serial.printf("[BTN]   Alarm %s — set for %02d:%02d  (%d:%02d %s)\n",
+        Serial.printf("[BTN]   Alarm %s — %02d:%02d (%d:%02d %s)\n",
                       alarmEnabled ? "ENABLED " : "DISABLED",
                       alarmHour, alarmMinute,
                       to12Hr(alarmHour), alarmMinute,
@@ -342,13 +382,10 @@ void readButtons() {
 void updateTimeDisplay() {
     uint8_t h = to12Hr(nowHour);
     uint8_t m = nowMinute;
-
-    // Positions: 0=tens-H  1=ones-H  (2=colon)  3=tens-M  4=ones-M
-    if (h / 10 == 0) {
-        timeDisp.writeDigitRaw(0, 0x00);  // blank leading zero
-    } else {
+    if (h / 10 == 0)
+        timeDisp.writeDigitRaw(0, 0x00);
+    else
         timeDisp.writeDigitNum(0, h / 10, false);
-    }
     timeDisp.writeDigitNum(1, h % 10, false);
     timeDisp.drawColon(colonOn);
     timeDisp.writeDigitNum(3, m / 10, false);
@@ -358,14 +395,12 @@ void updateTimeDisplay() {
 
 // ============================================================
 //  UPDATE DAY DISPLAY  (TM1637)
-//  Only redraws when day changes to reduce I2C traffic
 // ============================================================
 void updateDayDisplay() {
     if (nowDay == (uint8_t)prevDay) return;
     prevDay = (int8_t)nowDay;
-
     dayDisp.setSegments(DAY_SEG[nowDay % 7]);
-    Serial.printf("[TM16]  Day display → %s\n", DAY_NAMES[nowDay % 7]);
+    Serial.printf("[TM16]  Day display -> %s\n", DAY_NAMES[nowDay % 7]);
 }
 
 // ============================================================
@@ -373,9 +408,8 @@ void updateDayDisplay() {
 // ============================================================
 void checkAlarm() {
     if (!alarmEnabled || alarmFired || alarmPlaying) return;
-
     if (nowHour == alarmHour && nowMinute == alarmMinute) {
-        Serial.printf("[ALARM] TRIGGER — %02d:%02d matches alarm %02d:%02d\n",
+        Serial.printf("[ALARM] TRIGGER — %02d:%02d matches %02d:%02d\n",
                       nowHour, nowMinute, alarmHour, alarmMinute);
         alarmFired = true;
         playAlarm();
@@ -383,20 +417,17 @@ void checkAlarm() {
 }
 
 // ============================================================
-//  PLAY ALARM
-//  Tries /alarm.wav then /alarm.mp3; falls back to backup tone
+//  PLAY ALARM  — SD file first, LittleFS backup tone fallback
 // ============================================================
 void playAlarm() {
     alarmPlaying = true;
     audioNeedsRestart = false;
+    backupToneActive = false;
 
     if (sdAvailable && tryPlayAudioFile()) return;
 
-    Serial.println("[ALARM] No audio file available — starting backup tone.");
-    audioFilePlaying = false;
-    if (backupToneHandle == NULL) {
-        startBackupTone();
-    }
+    Serial.println("[ALARM] No SD audio — starting LittleFS backup tone.");
+    startBackupTone();
 }
 
 bool tryPlayAudioFile() {
@@ -421,16 +452,36 @@ bool tryPlayAudioFile() {
     return false;
 }
 
-// Called from loop() when audio EOF callback sets audioNeedsRestart
-void restartAudioFile() {
-    Serial.println("[AUDIO] Restarting alarm audio file ...");
-    if (sdAvailable && tryPlayAudioFile()) return;
-
-    Serial.println("[ALARM] Audio restart failed — switching to backup tone.");
-    audioFilePlaying = false;
-    if (backupToneHandle == NULL) {
-        startBackupTone();
+void startBackupTone() {
+    backupToneActive = true;
+    backupToneBegin  = millis();
+    if (audio.connecttoFS(LittleFS, "/backup_tone.wav")) {
+        audioFilePlaying = true;
+        Serial.println("[ALARM] Backup tone playing from LittleFS.");
+    } else {
+        Serial.println("[ALARM] ERROR: could not play backup_tone.wav from LittleFS!");
+        audioFilePlaying = false;
     }
+}
+
+// Called from loop() when audio EOF fires during alarm
+void restartAudio() {
+    if (backupToneActive) {
+        // Loop the backup tone
+        if (audio.connecttoFS(LittleFS, "/backup_tone.wav")) {
+            audioFilePlaying = true;
+        } else {
+            audioFilePlaying = false;
+            backupToneActive = false;
+            Serial.println("[ALARM] Backup tone restart failed.");
+        }
+        return;
+    }
+    // Try SD file again
+    Serial.println("[AUDIO] Restarting SD alarm audio ...");
+    if (sdAvailable && tryPlayAudioFile()) return;
+    Serial.println("[ALARM] SD restart failed — falling back to backup tone.");
+    startBackupTone();
 }
 
 // ============================================================
@@ -438,127 +489,34 @@ void restartAudioFile() {
 // ============================================================
 void stopAlarm() {
     if (!alarmPlaying) return;
-
     if (audioFilePlaying) {
         audio.stopSong();
         audioFilePlaying = false;
-        Serial.println("[ALARM] Audio file stopped.");
+        Serial.println("[ALARM] Audio stopped.");
     }
-
-    stopBackupTone();
-
     alarmPlaying      = false;
+    backupToneActive  = false;
     audioNeedsRestart = false;
     Serial.println("[ALARM] Alarm stopped.");
 }
 
 // ============================================================
-//  BACKUP TONE — FreeRTOS task
-//
-//  The ESP32-audioI2S library installs the I2S driver on
-//  I2S_NUM_0 during setupAudio(). After audio.stopSong() the
-//  driver remains installed, so we can write samples directly
-//  with i2s_write() without re-installing the driver.
-//
-//  Two alternating square-wave frequencies (880 Hz / 440 Hz,
-//  500 ms each) produce a clearly audible attention pattern.
-// ============================================================
-void startBackupTone() {
-    backupToneStop  = false;
-    backupToneBegin = millis();
-    Serial.printf("[ALARM] Backup tone: %d Hz / %d Hz alternating, sample rate %d\n",
-                  BACKUP_TONE_FREQ_HZ, BACKUP_TONE_FREQ_HZ / 2, BACKUP_SAMPLE_RATE);
-
-    xTaskCreatePinnedToCore(
-        backupToneTaskFn,
-        "BackupTone",
-        4096,
-        NULL,
-        2,                  // priority above loop task
-        &backupToneHandle,
-        1                   // CPU core 1
-    );
-}
-
-void stopBackupTone() {
-    if (backupToneHandle == NULL) return;
-
-    backupToneStop = true;
-    for (int i = 0; i < 200 && backupToneHandle != NULL; i++) {
-        vTaskDelay(pdMS_TO_TICKS(5));
-    }
-    if (backupToneHandle != NULL) {
-        vTaskDelete(backupToneHandle);
-        backupToneHandle = NULL;
-    }
-    Serial.println("[ALARM] Backup tone stopped.");
-}
-
-void backupToneTaskFn(void* pv) {
-    const uint32_t BUF_SAMPLES   = 256;
-    const uint32_t PHASE_SAMPLES = BACKUP_SAMPLE_RATE / 2; // 0.5 s per frequency
-
-    int16_t  buf[BUF_SAMPLES * 2]; // interleaved stereo: L, R, L, R …
-    uint32_t samplePos = 0;
-
-    const uint32_t freqs[2] = {
-        (uint32_t)BACKUP_TONE_FREQ_HZ,
-        (uint32_t)BACKUP_TONE_FREQ_HZ / 2
-    };
-
-    while (!backupToneStop) {
-        uint32_t freq   = freqs[(samplePos / PHASE_SAMPLES) % 2];
-        uint32_t period = BACKUP_SAMPLE_RATE / freq;
-
-        for (uint32_t i = 0; i < BUF_SAMPLES; i++) {
-            int16_t s = ((samplePos % period) < (period / 2))
-                        ? (int16_t)BACKUP_TONE_AMPLITUDE
-                        : (int16_t)-BACKUP_TONE_AMPLITUDE;
-            buf[i * 2]     = s;  // left
-            buf[i * 2 + 1] = s;  // right
-            samplePos++;
-        }
-
-        size_t written = 0;
-        i2s_write(I2S_NUM_0, buf, sizeof(buf), &written, portMAX_DELAY);
-    }
-
-    // Flush a buffer of silence so the amp doesn't click
-    memset(buf, 0, sizeof(buf));
-    size_t bw = 0;
-    i2s_write(I2S_NUM_0, buf, sizeof(buf), &bw, pdMS_TO_TICKS(50));
-
-    backupToneHandle = NULL;
-    vTaskDelete(NULL);
-}
-
-// ============================================================
 //  ESP32-audioI2S LIBRARY CALLBACKS
-//  These are weak-linked free functions called by the library.
 // ============================================================
-
 void audio_info(const char *info) {
     Serial.printf("[AUDIO] %s\n", info);
 }
 
-// Called when a WAV file finishes playing
 void audio_eof_wav(const char *info) {
     Serial.printf("[AUDIO] EOF WAV: %s\n", info);
-    if (alarmPlaying) {
-        audioNeedsRestart = true; // handled safely in loop()
-    } else {
-        audioFilePlaying = false;
-    }
+    if (alarmPlaying) audioNeedsRestart = true;
+    else              audioFilePlaying  = false;
 }
 
-// Called when an MP3/AAC/FLAC file finishes playing
 void audio_eof_mp3(const char *info) {
     Serial.printf("[AUDIO] EOF MP3: %s\n", info);
-    if (alarmPlaying) {
-        audioNeedsRestart = true;
-    } else {
-        audioFilePlaying = false;
-    }
+    if (alarmPlaying) audioNeedsRestart = true;
+    else              audioFilePlaying  = false;
 }
 
 // ============================================================
@@ -579,17 +537,14 @@ void setup() {
     setupTM1637();
     setupSD();
     setupAudio();
+    setupBackupToneWAV();
 
     pinMode(PIN_BTN_HOUR,   INPUT_PULLUP);
     pinMode(PIN_BTN_MINUTE, INPUT_PULLUP);
     pinMode(PIN_BTN_ALARM,  INPUT_PULLUP);
-    Serial.println("[BTN]   Hour=GPIO32  Minute=GPIO33  AlarmToggle=GPIO25");
-
-    Serial.println("---------------------------------------------");
+    Serial.println("[BTN]   Hour=GPIO32  Minute=GPIO33  Alarm=GPIO25");
+    Serial.println("=============================================");
     Serial.println("[BOOT]  Ready.");
-    Serial.println("[BOOT]  Hour/Minute buttons: set alarm time.");
-    Serial.println("[BOOT]  Alarm button: enable / disable alarm.");
-    Serial.println("[BOOT]  Any button while alarm sounds: stop alarm.");
     Serial.println("=============================================");
 }
 
@@ -599,68 +554,58 @@ void setup() {
 void loop() {
     uint32_t now = millis();
 
-    // ── Poll RTC every second ──────────────────────────────
+    // Poll RTC every second
     if (now - lastRTCPoll >= RTC_POLL_MS) {
         lastRTCPoll = now;
-
-        DateTime dt  = rtc.now();
-        nowHour      = dt.hour();
-        nowMinute    = dt.minute();
-        nowDay       = dt.dayOfTheWeek();
-
-        // Reset alarmFired when minute rolls over (prevents repeat triggers)
+        DateTime dt = rtc.now();
+        nowHour   = dt.hour();
+        nowMinute = dt.minute();
+        nowDay    = dt.dayOfTheWeek();
         if ((int8_t)nowMinute != prevMinute) {
             if (alarmFired) Serial.println("[ALARM] Minute changed — alarmFired reset.");
             alarmFired = false;
             prevMinute = (int8_t)nowMinute;
         }
-
         updateDayDisplay();
     }
 
-    // ── Blink colon every 500 ms ───────────────────────────
+    // Blink colon every 500 ms
     if (now - lastColonBlink >= COLON_BLINK_MS) {
         lastColonBlink = now;
         colonOn = !colonOn;
         updateTimeDisplay();
     }
 
-    // ── Buttons ────────────────────────────────────────────
     readButtons();
-
-    // ── Alarm check ────────────────────────────────────────
     checkAlarm();
 
-    // ── Audio library heartbeat (must be called frequently) ─
-    if (audioFilePlaying) {
-        audio.loop();
-    }
+    // Audio library heartbeat — must be called very frequently
+    if (audioFilePlaying) audio.loop();
 
-    // ── Restart audio file after EOF (set by callback) ─────
+    // Handle EOF-triggered restart
     if (audioNeedsRestart && alarmPlaying) {
         audioNeedsRestart = false;
         audioFilePlaying  = false;
-        restartAudioFile();
+        restartAudio();
     }
 
-    // ── Auto-stop backup tone after time limit ─────────────
-    if (alarmPlaying && !audioFilePlaying && backupToneHandle != NULL) {
+    // Auto-stop backup tone after time limit
+    if (alarmPlaying && backupToneActive) {
         if (now - backupToneBegin >= BACKUP_TONE_MAX_MS) {
-            Serial.println("[ALARM] Backup tone time limit reached — stopping.");
+            Serial.println("[ALARM] Backup tone time limit — stopping.");
             stopAlarm();
         }
     }
 
-    // ── Periodic serial status heartbeat ───────────────────
+    // Periodic serial heartbeat
     if (now - lastStatusPrint >= STATUS_PRINT_MS) {
         lastStatusPrint = now;
-        Serial.printf("[STAT]  %02d:%02d  %s  | alarm %s @ %02d:%02d (%d:%02d %s)%s\n",
-                      nowHour, nowMinute,
-                      DAY_NAMES[nowDay % 7],
+        Serial.printf("[STAT]  %02d:%02d %s | alarm %s @ %02d:%02d (%d:%02d %s)%s\n",
+                      nowHour, nowMinute, DAY_NAMES[nowDay % 7],
                       alarmEnabled ? "ON " : "OFF",
                       alarmHour, alarmMinute,
                       to12Hr(alarmHour), alarmMinute,
                       isAM(alarmHour) ? "AM" : "PM",
-                      alarmPlaying ? "  ** PLAYING **" : "");
+                      alarmPlaying ? "  **PLAYING**" : "");
     }
 }
