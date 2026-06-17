@@ -127,7 +127,7 @@ static const char* const DAY_NAMES[7] = {
 RTC_DS3231         rtc;
 Adafruit_7segment  timeDisp;              // I2C 0x70
 TM1637Display      dayDisp(PIN_TM1637_CLK, PIN_TM1637_DIO);
-Audio              audio;
+Audio*             audio = nullptr;       // heap-allocated in setupAudio() — avoids I2S driver init at global-ctor time
 SPIClass           sdSPI(VSPI);
 
 // ============================================================
@@ -258,8 +258,9 @@ void setupSD() {
 
 void setupAudio() {
     Serial.print("[AUDIO] Initializing I2S (BCLK=26 LRC=27 DIN=14) ... ");
-    audio.setPinout(PIN_I2S_BCLK, PIN_I2S_LRC, PIN_I2S_DIN);
-    audio.setVolume(AUDIO_VOLUME);
+    audio = new Audio();
+    audio->setPinout(PIN_I2S_BCLK, PIN_I2S_LRC, PIN_I2S_DIN);
+    audio->setVolume(AUDIO_VOLUME);
     Serial.printf("OK  (volume %d/21)\n", AUDIO_VOLUME);
 }
 
@@ -437,7 +438,7 @@ void playAlarm() {
 bool tryPlayAudioFile() {
     if (SD.exists("/alarm.wav")) {
         Serial.println("[ALARM] Connecting to /alarm.wav ...");
-        if (audio.connecttoFS(SD, "/alarm.wav")) {
+        if (audio->connecttoFS(SD, "/alarm.wav")) {
             audioFilePlaying = true;
             Serial.println("[ALARM] Playing /alarm.wav");
             return true;
@@ -446,7 +447,7 @@ bool tryPlayAudioFile() {
     }
     if (SD.exists("/alarm.mp3")) {
         Serial.println("[ALARM] Connecting to /alarm.mp3 ...");
-        if (audio.connecttoFS(SD, "/alarm.mp3")) {
+        if (audio->connecttoFS(SD, "/alarm.mp3")) {
             audioFilePlaying = true;
             Serial.println("[ALARM] Playing /alarm.mp3");
             return true;
@@ -459,7 +460,7 @@ bool tryPlayAudioFile() {
 void startBackupTone() {
     backupToneActive = true;
     backupToneBegin  = millis();
-    if (audio.connecttoFS(LittleFS, "/backup_tone.wav")) {
+    if (audio->connecttoFS(LittleFS, "/backup_tone.wav")) {
         audioFilePlaying = true;
         Serial.println("[ALARM] Backup tone playing from LittleFS.");
     } else {
@@ -472,7 +473,7 @@ void startBackupTone() {
 void restartAudio() {
     if (backupToneActive) {
         // Loop the backup tone
-        if (audio.connecttoFS(LittleFS, "/backup_tone.wav")) {
+        if (audio->connecttoFS(LittleFS, "/backup_tone.wav")) {
             audioFilePlaying = true;
         } else {
             audioFilePlaying = false;
@@ -494,7 +495,7 @@ void restartAudio() {
 void stopAlarm() {
     if (!alarmPlaying) return;
     if (audioFilePlaying) {
-        audio.stopSong();
+        audio->stopSong();
         audioFilePlaying = false;
         Serial.println("[ALARM] Audio stopped.");
     }
@@ -586,7 +587,7 @@ void loop() {
     checkAlarm();
 
     // Audio library heartbeat — must be called very frequently
-    if (audioFilePlaying) audio.loop();
+    if (audioFilePlaying) audio->loop();
 
     // Handle EOF-triggered restart
     if (audioNeedsRestart && alarmPlaying) {
