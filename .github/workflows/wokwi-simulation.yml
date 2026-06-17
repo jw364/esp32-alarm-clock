@@ -31,25 +31,11 @@ jobs:
       - name: Build firmware
         run: pio run
 
-      - name: Stage firmware artifacts
+      - name: Verify firmware
         run: |
-          mkdir -p firmware
-          cp .pio/build/esp32dev/firmware.bin firmware/firmware.bin
-          echo "firmware.bin: $(wc -c < firmware/firmware.bin) bytes"
-          md5sum firmware/firmware.bin
-          file firmware/firmware.bin
-          xxd firmware/firmware.bin | head -4
-
-      - name: Show project structure
-        run: |
-          echo "=== wokwi.toml ==="
+          ls -la .pio/build/esp32dev/firmware.bin .pio/build/esp32dev/firmware.elf
+          file .pio/build/esp32dev/firmware.bin
           cat wokwi.toml
-          echo "=== diagram.json ==="
-          cat diagram.json
-          echo "=== CWD ==="
-          pwd
-          echo "=== firmware/ ==="
-          ls -la firmware/
 
       - name: Install wokwi-cli
         run: |
