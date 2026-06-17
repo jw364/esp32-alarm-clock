@@ -126,7 +126,7 @@ static const char* const DAY_NAMES[7] = {
 // ============================================================
 RTC_DS3231         rtc;
 Adafruit_7segment  timeDisp;              // I2C 0x70
-TM1637Display      dayDisp(PIN_TM1637_CLK, PIN_TM1637_DIO);
+TM1637Display*     dayDisp = nullptr;     // heap-allocated in setup() — ctor calls pinMode/digitalWrite before initArduino() in Wokwi
 Audio*             audio = nullptr;       // heap-allocated in setupAudio() — avoids I2S driver init at global-ctor time
 SPIClass           sdSPI(VSPI);
 
@@ -232,8 +232,9 @@ void setupDisplay() {
 
 void setupTM1637() {
     Serial.print("[TM16]  Initializing TM1637 (CLK=16 DIO=17) ... ");
-    dayDisp.setBrightness(5);
-    dayDisp.setSegments(DAY_SEG[0]);
+    dayDisp = new TM1637Display(PIN_TM1637_CLK, PIN_TM1637_DIO);
+    dayDisp->setBrightness(5);
+    dayDisp->setSegments(DAY_SEG[0]);
     Serial.println("OK");
 }
 
@@ -404,7 +405,7 @@ void updateTimeDisplay() {
 void updateDayDisplay() {
     if (nowDay == (uint8_t)prevDay) return;
     prevDay = (int8_t)nowDay;
-    dayDisp.setSegments(DAY_SEG[nowDay % 7]);
+    dayDisp->setSegments(DAY_SEG[nowDay % 7]);
     Serial.printf("[TM16]  Day display -> %s\n", DAY_NAMES[nowDay % 7]);
 }
 
