@@ -17,32 +17,56 @@ steps:
   # ── 5. Boot complete ─────────────────────────────────────────
   - wait-serial: "[BOOT]  Ready."
 
-  # ── 6. Let the clock tick ────────────────────────────────────
-  - delay: 2000ms
+  # ── 6. Let the clock tick one second ────────────────────────
+  - delay: 1500ms
 
-  # ── 7. Enable alarm ──────────────────────────────────────────
-  - button:
+  # ── 7. Enable alarm via blue button ─────────────────────────
+  - set-control:
       part: btn_alarm
-      action: click
+      control: pressed
+      value: "1"
+  - delay: 100ms
+  - set-control:
+      part: btn_alarm
+      control: pressed
+      value: "0"
   - wait-serial: "Alarm ENABLED"
 
   # ── 8. Increment hour ────────────────────────────────────────
-  - button:
+  - set-control:
       part: btn_hour
-      action: click
+      control: pressed
+      value: "1"
+  - delay: 100ms
+  - set-control:
+      part: btn_hour
+      control: pressed
+      value: "0"
   - wait-serial: "Alarm hour"
 
   # ── 9. Increment minute ──────────────────────────────────────
-  - button:
+  - set-control:
       part: btn_minute
-      action: click
+      control: pressed
+      value: "1"
+  - delay: 100ms
+  - set-control:
+      part: btn_minute
+      control: pressed
+      value: "0"
   - wait-serial: "Alarm minute"
 
   # ── 10. Disable alarm ────────────────────────────────────────
-  - button:
+  - set-control:
       part: btn_alarm
-      action: click
+      control: pressed
+      value: "1"
+  - delay: 100ms
+  - set-control:
+      part: btn_alarm
+      control: pressed
+      value: "0"
   - wait-serial: "Alarm DISABLED"
 
-  # ── 11. Wait for periodic status print ───────────────────────
+  # ── 11. Wait for periodic status print (every 10 s) ─────────
   - wait-serial: "[STAT]"
