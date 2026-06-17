@@ -3,74 +3,7 @@
   "author": "jw364",
   "editor": "wokwi",
   "parts": [
-    {
-      "type": "board-esp32-devkit-v1",
-      "id": "esp",
-      "top": 0,
-      "left": 0,
-      "attrs": {}
-    },
-    {
-      "type": "wokwi-ds1307",
-      "id": "rtc1",
-      "top": -160,
-      "left": 230,
-      "attrs": {}
-    },
-    {
-      "type": "wokwi-pushbutton",
-      "id": "btn_hour",
-      "top": 180,
-      "left": -120,
-      "attrs": { "color": "red", "label": "Hour+" }
-    },
-    {
-      "type": "wokwi-pushbutton",
-      "id": "btn_minute",
-      "top": 240,
-      "left": -120,
-      "attrs": { "color": "green", "label": "Min+" }
-    },
-    {
-      "type": "wokwi-pushbutton",
-      "id": "btn_alarm",
-      "top": 300,
-      "left": -120,
-      "attrs": { "color": "blue", "label": "Alarm" }
-    },
-    {
-      "type": "wokwi-resistor",
-      "id": "r_i2c_sda",
-      "top": -80,
-      "left": 320,
-      "attrs": { "value": "4700" }
-    },
-    {
-      "type": "wokwi-resistor",
-      "id": "r_i2c_scl",
-      "top": -120,
-      "left": 320,
-      "attrs": { "value": "4700" }
-    }
+    {"type": "board-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {}}
   ],
-  "connections": [
-    ["esp:3V3",    "rtc1:5V",         "red",    []],
-    ["esp:GND.1",  "rtc1:GND",        "black",  []],
-    ["esp:D21",    "rtc1:SDA",        "blue",   []],
-    ["esp:D22",    "rtc1:SCL",        "yellow", []],
-
-    ["esp:3V3",    "r_i2c_sda:1",     "red",    []],
-    ["r_i2c_sda:2","esp:D21",         "blue",   []],
-    ["esp:3V3",    "r_i2c_scl:1",     "red",    []],
-    ["r_i2c_scl:2","esp:D22",         "yellow", []],
-
-    ["esp:D32",    "btn_hour:1.l",    "orange", []],
-    ["btn_hour:2.l","esp:GND.2",      "black",  []],
-
-    ["esp:D33",    "btn_minute:1.l",  "orange", []],
-    ["btn_minute:2.l","esp:GND.2",    "black",  []],
-
-    ["esp:D25",    "btn_alarm:1.l",   "orange", []],
-    ["btn_alarm:2.l","esp:GND.2",     "black",  []]
-  ]
+  "connections": []
 }
