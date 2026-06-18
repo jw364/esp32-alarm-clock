@@ -4,31 +4,31 @@
  * WIRING GUIDE
  * ============================================================
  *
- * I2C Bus — Adafruit HT16K33 7-Seg (0x70) + DS3231 RTC (0x68):
+ * I2C Bus — HT16K33 7-Seg (0x70) + DS3231 RTC (0x68) + SH1106 OLED (0x3C):
  *   SDA         → GPIO 21
  *   SCL         → GPIO 22
- *   Both devices share the same two wires.
+ *   All three devices share the same two wires.
  *   The DS3231 module also carries an AT24C32 EEPROM at 0x57
  *   which sits on the bus harmlessly — it is not used by this sketch.
  *
- * SH1106 1.3" 128x64 OLED (HiLetgo) — Software SPI:
- *   CLK  (SCK)  → GPIO 16
- *   MOSI (SDA)  → GPIO 17
- *   CS          → GPIO 4
- *   DC          → GPIO 15
- *   RES (RST)   → GPIO 19
+ *   I2C address summary (no conflicts):
+ *     0x3C  SH1106 OLED (Hosyond 1.3" — try 0x3D if init fails)
+ *     0x57  AT24C32 EEPROM on RTC module (unused)
+ *     0x68  DS3231 RTC
+ *     0x70  HT16K33 7-segment backpack
+ *
+ * Hosyond 1.3" I2C 128x64 SH1106 OLED:
+ *   SDA         → GPIO 21  (shared I2C bus — no extra wires)
+ *   SCL         → GPIO 22  (shared I2C bus — no extra wires)
  *   VCC         → 3.3 V
  *   GND         → GND
- *
- *   Software SPI is used so the OLED bus is fully isolated from the
- *   hardware SPI bus used by the MicroSD module. No shared wires.
  *
  * Push Buttons (other terminal → GND; INPUT_PULLUP used):
  *   Hour +      → GPIO 32
  *   Minute +    → GPIO 33
  *   Alarm On/Off→ GPIO 25
  *
- * I2S Amplifier (NULLLAB kit — NS4168 or compatible):
+ * I2S Amplifier (NULLLAB kit — NS4168 or compatible I2S Class D amp):
  *   BCLK        → GPIO 26
  *   LRC (WS)    → GPIO 27
  *   DIN         → GPIO 14
@@ -74,12 +74,9 @@
 #define PIN_SDA            21
 #define PIN_SCL            22
 
-// SH1106 OLED — software SPI (isolated from SD hardware SPI)
-#define PIN_OLED_CLK       16
-#define PIN_OLED_MOSI      17
-#define PIN_OLED_CS         4
-#define PIN_OLED_DC        15
-#define PIN_OLED_RST       19
+// SH1106 OLED — I2C (shared bus with DS3231 and HT16K33)
+// Default address 0x3C; change to 0x3D below if the module uses the alternate address
+#define OLED_I2C_ADDR      0x3C
 
 #define PIN_BTN_HOUR       32
 #define PIN_BTN_MINUTE     33
@@ -116,6 +113,9 @@ static const char* const DAY_NAMES[7] = {
 static const char* const DAY_ABBR[7] = {
   "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"
 };
+static const char* const MONTH_NAMES[12] = {
+  "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
+};
 
 // ============================================================
 //  OBJECTS
@@ -123,16 +123,10 @@ static const char* const DAY_ABBR[7] = {
 RTC_DS3231         rtc;
 Adafruit_7segment  timeDisp;              // I2C 0x70
 
-// SH1106 1.3" 128x64 OLED — full buffer, 4-wire software SPI
-// Constructor: (rotation, clk, data/MOSI, cs, dc, reset)
-U8G2_SH1106_128X64_NONAME_F_4W_SW_SPI u8g2(
-    U8G2_R0,
-    PIN_OLED_CLK,
-    PIN_OLED_MOSI,
-    PIN_OLED_CS,
-    PIN_OLED_DC,
-    PIN_OLED_RST
-);
+// SH1106 1.3" 128x64 OLED — full buffer, hardware I2C
+// Shares GPIO 21 (SDA) and GPIO 22 (SCL) with DS3231 and HT16K33.
+// U8X8_PIN_NONE = no dedicated RST pin; the module ties RST high internally.
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE);
 
 Audio              audio;
 SPIClass           sdSPI(VSPI);
@@ -152,6 +146,9 @@ volatile bool audioNeedsRestart = false; // set by EOF callback, consumed in loo
 uint8_t  nowHour          = 0;
 uint8_t  nowMinute        = 0;
 uint8_t  nowDay           = 0;    // 0=Sun … 6=Sat
+uint8_t  nowDayOfMonth    = 1;
+uint8_t  nowMonth         = 1;    // 1–12
+uint16_t nowYear          = 2000;
 int8_t   prevMinute       = -1;
 bool     colonOn          = false;
 
@@ -226,7 +223,7 @@ void setupRTC() {
     Serial.printf("[RTC]   Current time: %04d-%02d-%02d %02d:%02d:%02d  DoW=%d(%s)\n",
                   t.year(), t.month(), t.day(),
                   t.hour(), t.minute(), t.second(),
-                  t.dayOfTheWeek(), DAY_ABBR[t.dayOfTheWeek()]);
+                  t.dayOfTheWeek(), DAY_NAMES[t.dayOfTheWeek()]);
 }
 
 void setupDisplay() {
@@ -241,8 +238,9 @@ void setupDisplay() {
 }
 
 void setupOLED() {
-    Serial.print("[OLED]  Initializing SH1106 1.3\" 128x64 SW-SPI "
-                 "(CLK=16 MOSI=17 CS=4 DC=15 RST=19) ... ");
+    Serial.printf("[OLED]  Initializing SH1106 1.3\" 128x64 I2C (0x%02X, SDA=21 SCL=22) ... ",
+                  OLED_I2C_ADDR);
+    u8g2.setI2CAddress(OLED_I2C_ADDR << 1);  // U8g2 uses 8-bit address
     u8g2.begin();
 
     u8g2.clearBuffer();
@@ -375,14 +373,14 @@ void updateTimeDisplay() {
 }
 
 // ============================================================
-//  UPDATE OLED  (SH1106 1.3" — 128x64, U8g2 full buffer)
+//  UPDATE OLED  (SH1106 1.3" — 128x64, U8g2 full buffer, I2C)
 //
-//  Layout:
-//    Row 1 (y=22): Day abbreviation — large bold font
-//    Row 2 (y=38): Full day name    — small font
-//    Separator line at y=44
-//    Row 3 (y=57): Alarm time and ON/OFF state
-//    Row 4 (y=64): "** ALARM! **" — shown only when alarm is playing
+//  Layout (pixels top-to-bottom):
+//    y=20  Day name — bold 9x18 font  (e.g. "WEDNESDAY")
+//    y=33  Date    — small 6x10 font  (e.g. "Jun 18, 2026")
+//    y=37  Horizontal separator line
+//    y=50  Alarm   — small 6x10 font  (e.g. "ALM 7:00am ON")
+//    y=62  Alarm indicator — only when alarm is sounding
 //
 //  Called every RTC poll (1 s) and immediately after any button
 //  press that changes alarm hour, minute, or enable state.
@@ -390,29 +388,32 @@ void updateTimeDisplay() {
 void updateOLEDDisplay() {
     u8g2.clearBuffer();
 
-    // Abbreviated day — large
+    // Day name — bold large font
     u8g2.setFont(u8g2_font_9x18B_tf);
-    u8g2.drawStr(0, 20, DAY_ABBR[nowDay % 7]);
+    u8g2.drawStr(0, 20, DAY_NAMES[nowDay % 7]);
 
-    // Full day name — small
+    // Date — "Mon DD, YYYY"
+    char dateBuf[18];
+    uint8_t m = (nowMonth >= 1 && nowMonth <= 12) ? nowMonth : 1;
+    snprintf(dateBuf, sizeof(dateBuf), "%s %d, %04d",
+             MONTH_NAMES[m - 1], nowDayOfMonth, nowYear);
     u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(0, 33, DAY_NAMES[nowDay % 7]);
+    u8g2.drawStr(0, 33, dateBuf);
 
     // Separator
     u8g2.drawHLine(0, 37, 128);
 
-    // Alarm line
-    char buf[24];
-    snprintf(buf, sizeof(buf), "ALM %d:%02d%s %s",
+    // Alarm status
+    char almBuf[24];
+    snprintf(almBuf, sizeof(almBuf), "ALM %d:%02d%s %s",
              to12Hr(alarmHour), alarmMinute,
              isAM(alarmHour) ? "am" : "pm",
              alarmEnabled ? "ON" : "OFF");
     u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(0, 50, buf);
+    u8g2.drawStr(0, 50, almBuf);
 
     // Alarm-playing indicator
     if (alarmPlaying) {
-        u8g2.setFont(u8g2_font_6x10_tf);
         u8g2.drawStr(0, 62, "** ALARM! Press button **");
     }
 
@@ -626,6 +627,7 @@ void setup() {
     Serial.println("=============================================");
 
     Wire.begin(PIN_SDA, PIN_SCL);
+    Wire.setClock(400000); // 400 kHz fast-mode — all three I2C devices support this
 
     setupRTC();
     setupDisplay();
@@ -663,6 +665,9 @@ void loop() {
         nowHour      = dt.hour();
         nowMinute    = dt.minute();
         nowDay       = dt.dayOfTheWeek();
+        nowDayOfMonth= dt.day();
+        nowMonth     = dt.month();
+        nowYear      = dt.year();
 
         // Reset alarmFired when minute rolls over (prevents repeat triggers)
         if ((int8_t)nowMinute != prevMinute) {

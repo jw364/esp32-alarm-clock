@@ -48,7 +48,7 @@ A fully self-contained bedside alarm clock built on an ESP32, featuring a large 
 |---|---|---|
 | 1 | ESP32 38-pin DevKit (or equivalent) | Any 38-pin DevKit with VSPI/HSPI |
 | 1 | Adafruit 1.2" 4-Digit 7-Segment Display with I2C Backpack | HT16K33 driver, I2C address 0x70 |
-| 1 | HiLetgo 1.3" SPI 128x64 SH1106 OLED LCD Display Module | SPI interface (not I2C) |
+| 1 | Hosyond 1.3" I2C 128x64 SH1106 OLED Display (white) | I2C interface, 4-pin (VCC/GND/SDA/SCL) |
 | 1 | DS3231 AT24C32 IIC RTC Module | DS3231 at 0x68; AT24C32 EEPROM at 0x57 (unused) |
 | 1 | MicroSD card module | SPI interface, 3.3 V compatible |
 | 1 | MicroSD card | FAT32 formatted, any size |
@@ -64,13 +64,8 @@ A fully self-contained bedside alarm clock built on an ESP32, featuring a large 
 
 | Function | Signal | GPIO | Direction |
 |---|---|---|---|
-| **I2C** (shared bus) | SDA | 21 | Bidirectional |
-| **I2C** (shared bus) | SCL | 22 | Output |
-| **OLED CLK** (SW SPI) | CLK | 16 | Output |
-| **OLED MOSI** (SW SPI) | MOSI/SDA | 17 | Output |
-| **OLED CS** | CS | 4 | Output |
-| **OLED DC** | DC | 15 | Output |
-| **OLED RST** | RES | 19 | Output |
+| **I2C** (shared by 3 devices) | SDA | 21 | Bidirectional |
+| **I2C** (shared by 3 devices) | SCL | 22 | Output |
 | **Button** Hour+ | — | 32 | Input (PULLUP) |
 | **Button** Minute+ | — | 33 | Input (PULLUP) |
 | **Button** Alarm toggle | — | 25 | Input (PULLUP) |
@@ -83,51 +78,49 @@ A fully self-contained bedside alarm clock built on an ESP32, featuring a large 
 | **SD SPI** MOSI | MOSI | 13 | Output |
 
 > No reserved flash pins (GPIO 6-11) are used. No input-only pins (GPIO 34-39) are used as outputs.
+> GPIO 16, 17, 4, 15, and 19 are free for future expansion.
 
 ---
 
-### I2C Bus — Adafruit 7-Segment + DS3231 RTC
+### I2C Bus — Adafruit 7-Segment + DS3231 RTC + SH1106 OLED
 
-Both I2C devices share the same two wires. Wire each device's SDA and SCL to GPIO 21 and 22 respectively.
+All three I2C devices share the same two wires. Wire each device's SDA and SCL to GPIO 21 and 22 respectively.
 
 ```
 ESP32 GPIO 21 (SDA) ──+── HT16K33 SDA
                        +── DS3231  SDA
+                       +── SH1106  SDA
 
 ESP32 GPIO 22 (SCL) ──+── HT16K33 SCL
                        +── DS3231  SCL
+                       +── SH1106  SCL
 ```
 
-**I2C addresses in use:**
+**I2C addresses — no conflicts:**
 
 | Device | Address |
 |---|---|
+| SH1106 OLED (Hosyond 1.3") | `0x3C` (try `0x3D` if init fails) |
+| AT24C32 EEPROM (on RTC module, unused) | `0x57` |
 | DS3231 RTC | `0x68` |
 | HT16K33 7-seg backpack | `0x70` |
-| AT24C32 EEPROM (on RTC module, unused) | `0x57` |
 
-The AT24C32 EEPROM is soldered onto the DS3231 module. It sits on the bus without interfering because this sketch never talks to address `0x57`.
+The AT24C32 EEPROM is soldered onto the DS3231 module and sits on the bus harmlessly — this sketch never addresses `0x57`.
 
-> **Pull-up resistors:** Each I2C module includes on-board 4.7 kOhm pull-up resistors. Two sets in parallel gives approximately 2.35 kOhm effective pull-up, which is fine at 100 kHz. If I2C errors appear, desolder one set of pull-ups.
+The I2C bus runs at **400 kHz** (fast-mode). All three active devices (SH1106, DS3231, HT16K33) support 400 kHz.
 
----
+> **Pull-up resistors:** Each I2C module typically includes on-board 4.7 kOhm pull-up resistors. Three sets in parallel gives approximately 1.6 kOhm effective pull-up — fine at 400 kHz. If I2C errors appear, desolder pull-ups from one or two modules.
 
-### SH1106 OLED — Software SPI (Isolated Bus)
+### Hosyond 1.3" I2C SH1106 OLED
 
-The OLED uses a **dedicated software SPI** running on its own five GPIO pins. It does **not** share the hardware SPI bus with the microSD module, eliminating any bus contention.
+The OLED is a standard 4-pin I2C module. Connect it to the shared I2C bus — no extra GPIO pins required.
 
 ```
-ESP32           SH1106 OLED (HiLetgo 1.3")
-GPIO 16 ──────── CLK
-GPIO 17 ──────── MOSI  (labelled SDA on some modules)
-GPIO  4 ──────── CS
-GPIO 15 ──────── DC
-GPIO 19 ──────── RES
-3.3 V   ──────── VCC
-GND     ──────── GND
+ESP32 GPIO 21 (SDA) ──── OLED SDA
+ESP32 GPIO 22 (SCL) ──── OLED SCL
+3.3 V               ──── OLED VCC
+GND                 ──── OLED GND
 ```
-
-> **Tip:** Some HiLetgo boards label the data pin `SDA` even though this is an SPI interface. Wire it to GPIO 17 (MOSI).
 
 ---
 
@@ -317,12 +310,12 @@ WAV is tried first. The alarm loops automatically until a button is pressed.
 
 ## OLED Display
 
-The HiLetgo 1.3" SH1106 OLED shows four rows of information:
+The Hosyond 1.3" SH1106 OLED shows four rows of information on its 128x64 pixel screen:
 
 ```
 +------------------------+
-| WED                    |  <- Abbreviated day (large, 9x18 bold font)
-| WEDNESDAY              |  <- Full day name (small, 6x10 font)
+| WEDNESDAY              |  <- Full day name (9x18 bold font)
+| Jun 18, 2026           |  <- Date from RTC (6x10 font)
 |------------------------|  <- Separator line
 | ALM 7:00am ON          |  <- Alarm time and state (6x10 font)
 | ** ALARM! Press button |  <- Shown only when alarm is sounding
@@ -330,11 +323,16 @@ The HiLetgo 1.3" SH1106 OLED shows four rows of information:
 ```
 
 The OLED refreshes:
-- Every **1 second** (from the RTC poll)
+- Every **1 second** (from the RTC poll — updates time, date, and alarm state)
 - **Immediately** when Hour+, Minute+, or Alarm buttons are pressed
-- **Immediately** when the alarm starts or is stopped
+- **Immediately** when the alarm starts or stops
 
-The OLED uses software SPI on GPIO 16/17/4/15/19. It has no shared signals with the microSD hardware SPI bus, so both can operate simultaneously without conflict.
+The OLED shares the I2C bus (GPIO 21/22) with the DS3231 and HT16K33. No additional GPIO pins are used.
+
+**Planned future displays** (not yet implemented — see [Future Roadmap](#future-roadmap)):
+- Weather information (requires Wi-Fi + weather API)
+- Wi-Fi connection status
+- System messages
 
 ---
 
@@ -374,10 +372,11 @@ Connect a serial monitor at **115200 baud** to see detailed boot and runtime log
 - Run an I2C scanner sketch to detect all devices on the bus
 
 ### OLED shows nothing
-- Verify all five SPI wires: CLK=16, MOSI=17, CS=4, DC=15, RST=19
-- The HiLetgo module is 3.3 V only — do not apply 5 V to VCC
-- Try swapping CLK and MOSI connections if display shows noise but no readable content
-- Some HiLetgo boards label the MOSI pin as `SDA` — this is still the SPI data line
+- Check I2C wiring: SDA=21, SCL=22 (shares the bus with DS3231 and HT16K33)
+- The Hosyond module is 3.3 V only — do not apply 5 V to VCC
+- Run an I2C scanner sketch to confirm the OLED responds at address `0x3C`
+- If the OLED is at `0x3D` instead, change `OLED_I2C_ADDR` from `0x3C` to `0x3D` in the pin definitions
+- Verify no other device on the bus has address 0x3C (see address table above)
 
 ### RTC shows wrong time or prints "RTC lost power"
 - Follow the [First-Time RTC Setup](#first-time-rtc-setup) procedure
@@ -414,13 +413,25 @@ Connect a serial monitor at **115200 baud** to see detailed boot and runtime log
 
 ## Future Roadmap
 
+**Alarm & display:**
 - [ ] Persist alarm settings to AT24C32 EEPROM or ESP32 NVS so they survive power loss
 - [ ] Multiple alarm slots with day-of-week scheduling
 - [ ] Brightness control for 7-segment display (auto-dim at night via photoresistor)
-- [ ] OLED brightness auto-dim on schedule
+- [ ] OLED brightness auto-dim on time schedule
 - [ ] Volume adjustment via long button press
+
+**OLED extra screens (requires Wi-Fi):**
+- [ ] Weather information — current conditions + forecast via OpenWeatherMap API
+- [ ] Wi-Fi connection status indicator
+- [ ] System messages and boot status
+- [ ] Scrolling display when content exceeds one screen
+
+**Connectivity:**
 - [ ] Network time sync (NTP) via Wi-Fi as a RTC cross-check
 - [ ] Web interface for alarm configuration via Wi-Fi Access Point
+- [ ] OTA firmware updates over Wi-Fi
+
+**Hardware:**
 - [ ] 3D-printed enclosure to mount all modules
 - [ ] Custom PCB to replace breadboard wiring
 
