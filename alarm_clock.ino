@@ -7,27 +7,35 @@
  * I2C Bus — Adafruit HT16K33 7-Seg (0x70) + DS3231 RTC (0x68):
  *   SDA         → GPIO 21
  *   SCL         → GPIO 22
- *   (both devices share the same I2C bus)
+ *   Both devices share the same two wires.
+ *   The DS3231 module also carries an AT24C32 EEPROM at 0x57
+ *   which sits on the bus harmlessly — it is not used by this sketch.
  *
- * TM1637 4-Digit 7-Seg (Day of Week):
- *   CLK         → GPIO 16
- *   DIO         → GPIO 17
- *   VCC         → 3.3 V or 5 V
+ * SH1106 1.3" 128x64 OLED (HiLetgo) — Software SPI:
+ *   CLK  (SCK)  → GPIO 16
+ *   MOSI (SDA)  → GPIO 17
+ *   CS          → GPIO 4
+ *   DC          → GPIO 15
+ *   RES (RST)   → GPIO 19
+ *   VCC         → 3.3 V
  *   GND         → GND
+ *
+ *   Software SPI is used so the OLED bus is fully isolated from the
+ *   hardware SPI bus used by the MicroSD module. No shared wires.
  *
  * Push Buttons (other terminal → GND; INPUT_PULLUP used):
  *   Hour +      → GPIO 32
  *   Minute +    → GPIO 33
  *   Alarm On/Off→ GPIO 25
  *
- * I2S Amplifier (NS4168 / MAX98357A):
+ * I2S Amplifier (NULLLAB kit — NS4168 or compatible):
  *   BCLK        → GPIO 26
  *   LRC (WS)    → GPIO 27
  *   DIN         → GPIO 14
- *   VCC         → 5 V (check amp datasheet)
+ *   VCC         → 5 V (check your NULLLAB kit label)
  *   GND         → GND
  *
- * MicroSD Card Module (SPI — VSPI bus, custom pins):
+ * MicroSD Card Module (SPI — VSPI bus, remapped pins):
  *   CS          → GPIO 5
  *   SCK         → GPIO 18
  *   MISO        → GPIO 23
@@ -35,16 +43,17 @@
  *   VCC         → 3.3 V
  *   GND         → GND
  *
- * SD card must contain /alarm.wav and/or /alarm.mp3 at root.
+ * SD card must be FAT32-formatted and contain /alarm.wav and/or
+ * /alarm.mp3 at the root directory.
  *
  * ============================================================
  * REQUIRED LIBRARIES (Arduino Library Manager unless noted)
  * ============================================================
- *   RTClib                  — Adafruit
- *   Adafruit GFX Library    — Adafruit
- *   Adafruit LED Backpack   — Adafruit
- *   TM1637Display           — Avishay Orpaz
- *   ESP32-audioI2S          — schreibfaul1 (GitHub)
+ *   RTClib                  — Adafruit (Library Manager)
+ *   Adafruit GFX Library    — Adafruit (Library Manager)
+ *   Adafruit LED Backpack   — Adafruit (Library Manager)
+ *   U8g2                    — Oliver Krause (Library Manager)
+ *   ESP32-audioI2S          — schreibfaul1 (GitHub — install as .ZIP)
  *   SD                      — built-in with ESP32 Arduino core
  * ============================================================
  */
@@ -53,7 +62,7 @@
 #include <RTClib.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_LEDBackpack.h>
-#include <TM1637Display.h>
+#include <U8g2lib.h>
 #include <SD.h>
 #include <SPI.h>
 #include <Audio.h>          // ESP32-audioI2S by schreibfaul1
@@ -65,8 +74,12 @@
 #define PIN_SDA            21
 #define PIN_SCL            22
 
-#define PIN_TM1637_CLK     16
-#define PIN_TM1637_DIO     17
+// SH1106 OLED — software SPI (isolated from SD hardware SPI)
+#define PIN_OLED_CLK       16
+#define PIN_OLED_MOSI      17
+#define PIN_OLED_CS         4
+#define PIN_OLED_DC        15
+#define PIN_OLED_RST       19
 
 #define PIN_BTN_HOUR       32
 #define PIN_BTN_MINUTE     33
@@ -76,7 +89,7 @@
 #define PIN_I2S_LRC        27
 #define PIN_I2S_DIN        14
 
-#define PIN_SD_CS          5
+#define PIN_SD_CS           5
 #define PIN_SD_SCK         18
 #define PIN_SD_MISO        23
 #define PIN_SD_MOSI        13
@@ -95,29 +108,13 @@
 #define STATUS_PRINT_MS          10000   // serial heartbeat interval
 
 // ============================================================
-//  TM1637 SEGMENT PATTERNS FOR DAY NAMES
-//
-//  Bit order per TM1637Display library:
-//    bit 0 = A (top)        bit 4 = E (bottom-left)
-//    bit 1 = B (top-right)  bit 5 = F (top-left)
-//    bit 2 = C (bot-right)  bit 6 = G (middle)
-//    bit 3 = D (bottom)     bit 7 = decimal point (unused)
-//
-//  Notes:
-//    M (MON) is approximated — 7-segment cannot render it perfectly.
-//    W (WED) is approximated as a "u" shape (bottom arc).
+//  DAY NAME STRINGS
 // ============================================================
-static const uint8_t DAY_SEG[7][4] = {
-  { 0x6D, 0x3E, 0x54, 0x00 },  // 0 SUN  S=0x6D  U=0x3E  n=0x54
-  { 0x37, 0x3F, 0x54, 0x00 },  // 1 MON  M=0x37* O=0x3F  n=0x54
-  { 0x78, 0x3E, 0x79, 0x00 },  // 2 TUE  t=0x78  U=0x3E  E=0x79
-  { 0x1C, 0x79, 0x5E, 0x00 },  // 3 WED  W=0x1C* E=0x79  d=0x5E
-  { 0x78, 0x76, 0x3E, 0x00 },  // 4 THU  t=0x78  H=0x76  U=0x3E
-  { 0x71, 0x50, 0x06, 0x00 },  // 5 FRI  F=0x71  r=0x50  I=0x06
-  { 0x6D, 0x77, 0x78, 0x00 },  // 6 SAT  S=0x6D  A=0x77  t=0x78
-};
 static const char* const DAY_NAMES[7] = {
-  "SUN","MON","TUE","WED","THU","FRI","SAT"
+  "SUNDAY", "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"
+};
+static const char* const DAY_ABBR[7] = {
+  "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"
 };
 
 // ============================================================
@@ -125,7 +122,18 @@ static const char* const DAY_NAMES[7] = {
 // ============================================================
 RTC_DS3231         rtc;
 Adafruit_7segment  timeDisp;              // I2C 0x70
-TM1637Display      dayDisp(PIN_TM1637_CLK, PIN_TM1637_DIO);
+
+// SH1106 1.3" 128x64 OLED — full buffer, 4-wire software SPI
+// Constructor: (rotation, clk, data/MOSI, cs, dc, reset)
+U8G2_SH1106_128X64_NONAME_F_4W_SW_SPI u8g2(
+    U8G2_R0,
+    PIN_OLED_CLK,
+    PIN_OLED_MOSI,
+    PIN_OLED_CS,
+    PIN_OLED_DC,
+    PIN_OLED_RST
+);
+
 Audio              audio;
 SPIClass           sdSPI(VSPI);
 
@@ -145,7 +153,6 @@ uint8_t  nowHour          = 0;
 uint8_t  nowMinute        = 0;
 uint8_t  nowDay           = 0;    // 0=Sun … 6=Sat
 int8_t   prevMinute       = -1;
-int8_t   prevDay          = -1;
 bool     colonOn          = false;
 
 uint32_t lastRTCPoll      = 0;
@@ -179,12 +186,12 @@ Button bAlarm  = { PIN_BTN_ALARM,  true, true, 0, false };
 // ============================================================
 void    setupRTC();
 void    setupDisplay();
-void    setupTM1637();
+void    setupOLED();
 void    setupSD();
 void    setupAudio();
 void    readButtons();
 void    updateTimeDisplay();
-void    updateDayDisplay();
+void    updateOLEDDisplay();
 void    checkAlarm();
 void    playAlarm();
 void    stopAlarm();
@@ -219,7 +226,7 @@ void setupRTC() {
     Serial.printf("[RTC]   Current time: %04d-%02d-%02d %02d:%02d:%02d  DoW=%d(%s)\n",
                   t.year(), t.month(), t.day(),
                   t.hour(), t.minute(), t.second(),
-                  t.dayOfTheWeek(), DAY_NAMES[t.dayOfTheWeek()]);
+                  t.dayOfTheWeek(), DAY_ABBR[t.dayOfTheWeek()]);
 }
 
 void setupDisplay() {
@@ -233,10 +240,18 @@ void setupDisplay() {
     Serial.println("OK");
 }
 
-void setupTM1637() {
-    Serial.print("[TM16]  Initializing TM1637 (CLK=16 DIO=17) ... ");
-    dayDisp.setBrightness(5); // 0–7
-    dayDisp.setSegments(DAY_SEG[0]); // SUN as power-on test
+void setupOLED() {
+    Serial.print("[OLED]  Initializing SH1106 1.3\" 128x64 SW-SPI "
+                 "(CLK=16 MOSI=17 CS=4 DC=15 RST=19) ... ");
+    u8g2.begin();
+
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_7x13B_tf);
+    u8g2.drawStr(4, 24, "ALARM CLOCK");
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(4, 42, "Initializing...");
+    u8g2.sendBuffer();
+
     Serial.println("OK");
 }
 
@@ -318,11 +333,13 @@ void readButtons() {
         alarmHour = (alarmHour + 1) % 24;
         Serial.printf("[BTN]   Alarm hour   → %02d:xx  (%d %s)\n",
                       alarmHour, to12Hr(alarmHour), isAM(alarmHour) ? "AM" : "PM");
+        updateOLEDDisplay();
     }
 
     if (bMinute.edge) {
         alarmMinute = (alarmMinute + 1) % 60;
         Serial.printf("[BTN]   Alarm minute → xx:%02d\n", alarmMinute);
+        updateOLEDDisplay();
     }
 
     if (bAlarm.edge) {
@@ -332,6 +349,7 @@ void readButtons() {
                       alarmHour, alarmMinute,
                       to12Hr(alarmHour), alarmMinute,
                       isAM(alarmHour) ? "AM" : "PM");
+        updateOLEDDisplay();
     }
 }
 
@@ -357,15 +375,48 @@ void updateTimeDisplay() {
 }
 
 // ============================================================
-//  UPDATE DAY DISPLAY  (TM1637)
-//  Only redraws when day changes to reduce I2C traffic
+//  UPDATE OLED  (SH1106 1.3" — 128x64, U8g2 full buffer)
+//
+//  Layout:
+//    Row 1 (y=22): Day abbreviation — large bold font
+//    Row 2 (y=38): Full day name    — small font
+//    Separator line at y=44
+//    Row 3 (y=57): Alarm time and ON/OFF state
+//    Row 4 (y=64): "** ALARM! **" — shown only when alarm is playing
+//
+//  Called every RTC poll (1 s) and immediately after any button
+//  press that changes alarm hour, minute, or enable state.
 // ============================================================
-void updateDayDisplay() {
-    if (nowDay == (uint8_t)prevDay) return;
-    prevDay = (int8_t)nowDay;
+void updateOLEDDisplay() {
+    u8g2.clearBuffer();
 
-    dayDisp.setSegments(DAY_SEG[nowDay % 7]);
-    Serial.printf("[TM16]  Day display → %s\n", DAY_NAMES[nowDay % 7]);
+    // Abbreviated day — large
+    u8g2.setFont(u8g2_font_9x18B_tf);
+    u8g2.drawStr(0, 20, DAY_ABBR[nowDay % 7]);
+
+    // Full day name — small
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(0, 33, DAY_NAMES[nowDay % 7]);
+
+    // Separator
+    u8g2.drawHLine(0, 37, 128);
+
+    // Alarm line
+    char buf[24];
+    snprintf(buf, sizeof(buf), "ALM %d:%02d%s %s",
+             to12Hr(alarmHour), alarmMinute,
+             isAM(alarmHour) ? "am" : "pm",
+             alarmEnabled ? "ON" : "OFF");
+    u8g2.setFont(u8g2_font_6x10_tf);
+    u8g2.drawStr(0, 50, buf);
+
+    // Alarm-playing indicator
+    if (alarmPlaying) {
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawStr(0, 62, "** ALARM! Press button **");
+    }
+
+    u8g2.sendBuffer();
 }
 
 // ============================================================
@@ -389,6 +440,7 @@ void checkAlarm() {
 void playAlarm() {
     alarmPlaying = true;
     audioNeedsRestart = false;
+    updateOLEDDisplay(); // show ALARM indicator immediately
 
     if (sdAvailable && tryPlayAudioFile()) return;
 
@@ -450,6 +502,7 @@ void stopAlarm() {
     alarmPlaying      = false;
     audioNeedsRestart = false;
     Serial.println("[ALARM] Alarm stopped.");
+    updateOLEDDisplay(); // clear ALARM indicator immediately
 }
 
 // ============================================================
@@ -576,7 +629,7 @@ void setup() {
 
     setupRTC();
     setupDisplay();
-    setupTM1637();
+    setupOLED();
     setupSD();
     setupAudio();
 
@@ -584,6 +637,9 @@ void setup() {
     pinMode(PIN_BTN_MINUTE, INPUT_PULLUP);
     pinMode(PIN_BTN_ALARM,  INPUT_PULLUP);
     Serial.println("[BTN]   Hour=GPIO32  Minute=GPIO33  AlarmToggle=GPIO25");
+
+    // Draw first real OLED frame now that RTC time is known
+    updateOLEDDisplay();
 
     Serial.println("---------------------------------------------");
     Serial.println("[BOOT]  Ready.");
@@ -615,7 +671,7 @@ void loop() {
             prevMinute = (int8_t)nowMinute;
         }
 
-        updateDayDisplay();
+        updateOLEDDisplay();
     }
 
     // ── Blink colon every 500 ms ───────────────────────────
@@ -656,7 +712,7 @@ void loop() {
         lastStatusPrint = now;
         Serial.printf("[STAT]  %02d:%02d  %s  | alarm %s @ %02d:%02d (%d:%02d %s)%s\n",
                       nowHour, nowMinute,
-                      DAY_NAMES[nowDay % 7],
+                      DAY_ABBR[nowDay % 7],
                       alarmEnabled ? "ON " : "OFF",
                       alarmHour, alarmMinute,
                       to12Hr(alarmHour), alarmMinute,
